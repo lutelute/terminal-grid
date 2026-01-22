@@ -341,21 +341,60 @@ show_window_preview() {
     return 0
 }
 
+# ディスプレイ情報をキャッシュ
+DISPLAY_INFO=""
+DISPLAY_COUNT=0
+
+cache_display_info() {
+    DISPLAY_INFO=$(get_screen_size_nsscreen)
+    DISPLAY_COUNT=$(echo "$DISPLAY_INFO" | grep -c "|")
+}
+
+# ディスプレイ一覧を表示
+show_displays() {
+    echo -e "${BOLD}【接続ディスプレイ】${NC}"
+    echo ""
+    local count=1
+    while IFS='|' read -r num fx fy fw fh asx asy vw vh; do
+        if [ -n "$num" ]; then
+            local main_mark=""
+            [ "$fx" = "0" ] && [ "$fy" = "0" ] && main_mark=" ${GREEN}(メイン)${NC}"
+            echo -e "  ${CYAN}$count)${NC} ディスプレイ$num: ${fw}x${fh} (使用可能: ${vw}x${vh})$main_mark"
+            ((count++))
+        fi
+    done <<< "$DISPLAY_INFO"
+    echo ""
+}
+
 # インタラクティブメニュー
 interactive_menu() {
+    cache_display_info
+
     while true; do
         show_window_preview "all"
 
         echo ""
+        show_displays
+
         echo -e "${BOLD}【グリッド配置】${NC}"
         echo ""
-        echo -e "  ${CYAN}a)${NC} 自動配置 (推奨)"
+        echo -e "  ${CYAN}a)${NC} 自動配置（各ディスプレイ内で配置）"
         echo ""
-        echo -e "  ${BOLD}列数選択:${NC}"
-        echo -e "  ${CYAN}2)${NC} 2列    ${CYAN}3)${NC} 3列    ${CYAN}4)${NC} 4列    ${CYAN}5)${NC} 5列"
+
+        # ディスプレイ選択オプション
+        echo -e "  ${BOLD}ディスプレイを選んで配置:${NC}"
+        local count=1
+        while IFS='|' read -r num fx fy fw fh asx asy vw vh; do
+            if [ -n "$num" ]; then
+                local main_mark=""
+                [ "$fx" = "0" ] && [ "$fy" = "0" ] && main_mark=" (メイン)"
+                echo -e "  ${CYAN}$count)${NC} ディスプレイ$count$main_mark に全ウィンドウを配置"
+                ((count++))
+            fi
+        done <<< "$DISPLAY_INFO"
+
         echo ""
-        echo -e "  ${CYAN}c)${NC} カスタム (列x行を指定)"
-        echo ""
+        echo -e "  ${CYAN}g)${NC} グリッドサイズを指定"
         echo -e "  ${CYAN}r)${NC} 更新    ${CYAN}q)${NC} 終了"
         echo ""
         echo -ne "${BOLD}選択: ${NC}"
@@ -365,44 +404,26 @@ interactive_menu() {
         case $choice in
             a|A)
                 echo ""
-                echo -e "${BOLD}自動グリッド配置を実行中...${NC}"
-                local arranged=$(arrange_terminal_windows 0 0)
+                echo -e "${BOLD}各ディスプレイ内で自動配置中...${NC}"
+                local arranged=$(arrange_terminal_windows 0 0 0)
                 echo -e "${GREEN}✓ ${arranged}個のウィンドウを配置しました${NC}"
                 echo ""
                 echo -ne "Enterで続行..."
                 read -r
                 ;;
-            2)
-                select_rows_and_arrange 2
-                ;;
-            3)
-                select_rows_and_arrange 3
-                ;;
-            4)
-                select_rows_and_arrange 4
-                ;;
-            5)
-                select_rows_and_arrange 5
-                ;;
-            c|C)
-                echo ""
-                echo -ne "${BOLD}列数を入力: ${NC}"
-                read -r cols
-                echo -ne "${BOLD}行数を入力: ${NC}"
-                read -r rows
-                if [[ "$cols" =~ ^[0-9]+$ ]] && [[ "$rows" =~ ^[0-9]+$ ]]; then
-                    echo ""
-                    echo -e "${BOLD}${cols}列 x ${rows}行 で配置中...${NC}"
-                    local arranged=$(arrange_terminal_windows "$cols" "$rows")
-                    echo -e "${GREEN}✓ ${arranged}個のウィンドウを配置しました${NC}"
+            [1-9])
+                if [ "$choice" -le "$DISPLAY_COUNT" ]; then
+                    select_grid_for_display "$choice"
                 else
-                    echo -e "${RED}無効な入力です${NC}"
+                    echo -e "${RED}無効な選択です${NC}"
+                    sleep 1
                 fi
-                echo ""
-                echo -ne "Enterで続行..."
-                read -r
+                ;;
+            g|G)
+                select_display_and_grid
                 ;;
             r|R)
+                cache_display_info
                 continue
                 ;;
             q|Q)
@@ -418,42 +439,88 @@ interactive_menu() {
     done
 }
 
-# 行数を選択して配置
-select_rows_and_arrange() {
-    local cols=$1
+# ディスプレイを選んでグリッドを指定
+select_display_and_grid() {
     echo ""
-    echo -e "${BOLD}${cols}列で配置 - 行数を選択:${NC}"
-    echo ""
-    echo -e "  ${CYAN}a)${NC} 自動    ${CYAN}1)${NC} 1行    ${CYAN}2)${NC} 2行    ${CYAN}3)${NC} 3行    ${CYAN}4)${NC} 4行"
-    echo ""
-    echo -ne "${BOLD}行数: ${NC}"
-    read -r rows_choice
+    echo -e "${BOLD}配置先ディスプレイを選択:${NC}"
 
+    local count=1
+    while IFS='|' read -r num fx fy fw fh asx asy vw vh; do
+        if [ -n "$num" ]; then
+            local main_mark=""
+            [ "$fx" = "0" ] && [ "$fy" = "0" ] && main_mark=" (メイン)"
+            echo -e "  ${CYAN}$count)${NC} ディスプレイ$count$main_mark (${fw}x${fh})"
+            ((count++))
+        fi
+    done <<< "$DISPLAY_INFO"
+
+    echo ""
+    echo -ne "${BOLD}ディスプレイ番号: ${NC}"
+    read -r disp_choice
+
+    if [[ "$disp_choice" =~ ^[0-9]+$ ]] && [ "$disp_choice" -ge 1 ] && [ "$disp_choice" -le "$DISPLAY_COUNT" ]; then
+        select_grid_for_display "$disp_choice"
+    else
+        echo -e "${RED}無効な選択です${NC}"
+        sleep 1
+    fi
+}
+
+# 指定ディスプレイにグリッド配置
+select_grid_for_display() {
+    local target_display=$1
+
+    echo ""
+    echo -e "${BOLD}ディスプレイ$target_display に配置 - グリッドを選択:${NC}"
+    echo ""
+    echo -e "  ${CYAN}a)${NC} 自動"
+    echo -e "  ${CYAN}2)${NC} 2列    ${CYAN}3)${NC} 3列    ${CYAN}4)${NC} 4列    ${CYAN}5)${NC} 5列"
+    echo -e "  ${CYAN}c)${NC} カスタム (列x行を指定)"
+    echo ""
+    echo -ne "${BOLD}選択: ${NC}"
+    read -r grid_choice
+
+    local cols=0
     local rows=0
-    case $rows_choice in
-        a|A) rows=0 ;;
-        1) rows=1 ;;
-        2) rows=2 ;;
-        3) rows=3 ;;
-        4) rows=4 ;;
-        *)
-            if [[ "$rows_choice" =~ ^[0-9]+$ ]]; then
-                rows=$rows_choice
-            else
-                echo -e "${RED}無効な選択です${NC}"
+
+    case $grid_choice in
+        a|A)
+            cols=0
+            rows=0
+            ;;
+        2|3|4|5)
+            cols=$grid_choice
+            echo ""
+            echo -e "  ${CYAN}a)${NC} 自動    ${CYAN}1)${NC} 1行    ${CYAN}2)${NC} 2行    ${CYAN}3)${NC} 3行    ${CYAN}4)${NC} 4行"
+            echo -ne "${BOLD}行数: ${NC}"
+            read -r rows_choice
+            case $rows_choice in
+                a|A) rows=0 ;;
+                [1-4]) rows=$rows_choice ;;
+                *) rows=0 ;;
+            esac
+            ;;
+        c|C)
+            echo -ne "${BOLD}列数: ${NC}"
+            read -r cols
+            echo -ne "${BOLD}行数: ${NC}"
+            read -r rows
+            if ! [[ "$cols" =~ ^[0-9]+$ ]] || ! [[ "$rows" =~ ^[0-9]+$ ]]; then
+                echo -e "${RED}無効な入力です${NC}"
                 sleep 1
                 return
             fi
             ;;
+        *)
+            echo -e "${RED}無効な選択です${NC}"
+            sleep 1
+            return
+            ;;
     esac
 
     echo ""
-    if [ "$rows" -eq 0 ]; then
-        echo -e "${BOLD}${cols}列 x 自動行 で配置中...${NC}"
-    else
-        echo -e "${BOLD}${cols}列 x ${rows}行 で配置中...${NC}"
-    fi
-    local arranged=$(arrange_terminal_windows "$cols" "$rows")
+    echo -e "${BOLD}ディスプレイ$target_display に配置中...${NC}"
+    local arranged=$(arrange_terminal_windows "$cols" "$rows" "$target_display")
     echo -e "${GREEN}✓ ${arranged}個のウィンドウを配置しました${NC}"
     echo ""
     echo -ne "Enterで続行..."
@@ -525,142 +592,199 @@ show_grid_options() {
     done
 }
 
-# Terminal.appのウィンドウをグリッド配置（ディスプレイ別に自動配置）
+# Terminal.appのウィンドウをグリッド配置（指定ディスプレイに配置）
 arrange_terminal_windows() {
     local cols=$1
     local rows=$2
-    local menu_bar_h=$MENU_BAR_HEIGHT
+    local display_num=${3:-0}  # 0=自動（現在位置維持）、1以上=指定ディスプレイに移動
     local pad=$PADDING
 
-    osascript << EOF
-tell application "Terminal"
-    activate
-    delay 0.3
+    osascript -e "
+use framework \"AppKit\"
 
-    -- ディスプレイ別にウィンドウを分類（タブ数1のウィンドウのみ対象）
-    set display1Windows to {}
-    set display2Windows to {}
-    set skippedWindows to 0
+-- ディスプレイ情報を取得
+set screenList to current application's NSScreen's screens()
+set screenCount to count of screenList
+set mainFrame to (item 1 of screenList)'s frame()
+set mainH to (current application's NSHeight(mainFrame)) as integer
 
-    repeat with w in (every window whose visible is true)
-        set wid to id of w
-        set tabCount to count of tabs of w
+-- グローバルデスクトップの上端を計算（Terminal.appはこれをy=0として使用）
+set globalTop to 0
+repeat with i from 1 to screenCount
+    set aScreen to item i of screenList
+    set frm to aScreen's frame()
+    set fy to (current application's NSMinY(frm)) as integer
+    set fh to (current application's NSHeight(frm)) as integer
+    set screenTop to mainH - (fy + fh)
+    if screenTop < globalTop then
+        set globalTop to screenTop
+    end if
+end repeat
 
-        -- 複数タブを持つウィンドウは配置対象から除外
-        if tabCount > 1 then
-            set skippedWindows to skippedWindows + 1
-        else
-            set b to bounds of w
-            set wy to item 2 of b
+-- 各ディスプレイの座標情報を収集
+set displayInfo to {}
+repeat with i from 1 to screenCount
+    set aScreen to item i of screenList
+    set frm to aScreen's frame()
+    set vf to aScreen's visibleFrame()
 
-            if wy < 0 then
-                set end of display2Windows to wid
-            else
-                set end of display1Windows to wid
-            end if
-        end if
-    end repeat
+    -- NSScreen座標（左下原点）
+    set fx to (current application's NSMinX(frm)) as integer
+    set fy to (current application's NSMinY(frm)) as integer
+    set fw to (current application's NSWidth(frm)) as integer
+    set fh to (current application's NSHeight(frm)) as integer
 
-    set totalArranged to 0
-    set menuBarH to $menu_bar_h
-    set pad to $pad
+    set vx to (current application's NSMinX(vf)) as integer
+    set vy to (current application's NSMinY(vf)) as integer
+    set vw to (current application's NSWidth(vf)) as integer
+    set vh to (current application's NSHeight(vf)) as integer
 
-    -- ディスプレイ1 (メイン: 1800x1169)
-    if (count of display1Windows) > 0 then
-        set cnt to count of display1Windows
+    -- Terminal.app用座標に変換（AppleScript標準座標系）
+    set asX to vx
+    set asY to (mainH - vy - vh)
+
+    set end of displayInfo to {x:asX, y:asY, w:vw, h:vh, nsX:fx, nsY:fy, nsW:fw, nsH:fh, globalTop:globalTop}
+end repeat
+
+set pad to $pad
+set totalArranged to 0
+set targetDisplay to $display_num
+
+tell application \"Terminal\"
+    set wl to every window whose visible is true
+    set cnt to count of wl
+    if cnt = 0 then return 0
+
+    -- ターゲットディスプレイが指定されている場合
+    if targetDisplay > 0 and targetDisplay ≤ screenCount then
+        set dInfo to item targetDisplay of displayInfo
+        set screenX to x of dInfo
+        set screenY to y of dInfo
+        set screenW to w of dInfo
+        set screenH to h of dInfo
+        set gTop to globalTop of dInfo
 
         -- グリッドサイズを決定
         if $cols > 0 then
-            set cols to $cols
+            set c to $cols
         else if cnt ≤ 2 then
-            set cols to 2
+            set c to 2
         else if cnt ≤ 4 then
-            set cols to 2
+            set c to 2
         else if cnt ≤ 6 then
-            set cols to 3
+            set c to 3
         else
-            set cols to 4
+            set c to 4
         end if
-        set rows to (cnt + cols - 1) div cols
+        if $rows > 0 then
+            set r to $rows
+        else
+            set r to (cnt + c - 1) div c
+        end if
 
-        set screenW to 1800
-        set screenH to 1169 - menuBarH
+        set winW to ((screenW - pad * (c + 1)) / c) as integer
+        set winH to ((screenH - pad * (r + 1)) / r) as integer
 
-        set winW to ((screenW - pad * (cols + 1)) / cols) as integer
-        set winH to ((screenH - pad * (rows + 1)) / rows) as integer
-        set startY to menuBarH
+        -- 外部ディスプレイの場合の座標調整
+        -- Terminal.appはグローバルデスクトップ座標（y=0が最上部）を使用
+        -- screenYはすでにglobalTopで調整済み
 
+        -- ディスプレイ3など幅広ディスプレイでは右端で配置が崩れるため
+        -- 使用可能幅を制限（2048px以下に）
+        if screenW > 2048 then
+            set screenW to 2048
+        end if
+
+        set winW to ((screenW - pad * (c + 1)) / c) as integer
+        set winH to ((screenH - pad * (r + 1)) / r) as integer
+
+        -- メニューバー/ツールバー分のオフセット
+        set menuOffset to 50
+
+        -- 外部ディスプレイの場合、まず全ウィンドウをメインに移動（Terminal.appの制限回避）
+        if gTop < 0 then
+            repeat with i from 1 to cnt
+                set bounds of item i of wl to {100, 1500, 600, 1900}
+            end repeat
+        end if
+
+        -- グリッド配置
         repeat with i from 1 to cnt
-            set wid to item i of display1Windows
             set idx to i - 1
-            set c to idx mod cols
-            set r to idx div cols
-            set x1 to pad + c * (winW + pad)
-            set y1 to startY + pad + r * (winH + pad)
-
-            set frontmost of window id wid to true
-            delay 0.1
-            set bounds of window id wid to {x1, y1, x1 + winW, y1 + winH}
-            delay 0.1
+            set col to idx mod c
+            set row to idx div c
+            set x1 to screenX + pad + col * (winW + pad)
+            set y1 to screenY + menuOffset + pad + row * (winH + pad)
+            set bounds of item i of wl to {x1, y1, x1 + winW, y1 + winH}
             set totalArranged to totalArranged + 1
         end repeat
-    end if
+    else
+        -- 自動モード: 各ディスプレイ内で配置
+        repeat with dispIdx from 1 to screenCount
+            set dInfo to item dispIdx of displayInfo
+            set screenX to x of dInfo
+            set screenY to y of dInfo
+            set screenW to w of dInfo
+            set screenH to h of dInfo
 
-    -- ディスプレイ2 (外部: 1920x1080、メインディスプレイの上に配置)
-    -- 注意: Terminal.appは外部ディスプレイで複数行配置に制限があるため、
-    -- 行数を最小限に抑える配置を行う
-    if (count of display2Windows) > 0 then
-        set cnt to count of display2Windows
+            -- このディスプレイの範囲を計算（AppleScript座標）
+            set dispX1 to screenX
+            set dispY1 to screenY
+            set dispX2 to screenX + screenW
+            set dispY2 to screenY + screenH
 
-        -- グリッドサイズを決定
-        if $cols > 0 then
-            -- カスタムモード: ユーザー指定の列数を使用
-            set cols to $cols
-            set rows to (cnt + cols - 1) div cols
-        else
-            -- 自動モード: 最小幅200pxを確保しつつ行数を最小化
-            set minWidth to 200
-            set screenW to 1920
-            set maxCols to ((screenW - pad) / (minWidth + pad)) as integer
-            if maxCols < 1 then set maxCols to 1
+            -- このディスプレイのウィンドウを収集
+            set dispWindows to {}
+            repeat with i from 1 to cnt
+                set b to bounds of item i of wl
+                set wx to item 1 of b
+                set wy to item 2 of b
 
-            if cnt ≤ maxCols then
-                -- 1行に収まる場合
-                set cols to cnt
-                set rows to 1
-            else
-                -- 複数行必要: 最小行数で配置（行分布の問題は許容）
-                set cols to maxCols
-                set rows to (cnt + cols - 1) div cols
+                -- ウィンドウの中心がこのディスプレイ内にあるか判定
+                set winCenterX to wx + ((item 3 of b) - wx) / 2
+                set winCenterY to wy + ((item 4 of b) - wy) / 2
+
+                if winCenterX ≥ dispX1 and winCenterX < dispX2 and winCenterY ≥ dispY1 and winCenterY < dispY2 then
+                    set end of dispWindows to i
+                end if
+            end repeat
+
+            set dispCnt to count of dispWindows
+            if dispCnt > 0 then
+                -- グリッドサイズを決定
+                if $cols > 0 then
+                    set c to $cols
+                else if dispCnt ≤ 2 then
+                    set c to 2
+                else if dispCnt ≤ 4 then
+                    set c to 2
+                else if dispCnt ≤ 6 then
+                    set c to 3
+                else
+                    set c to 4
+                end if
+                set r to (dispCnt + c - 1) div c
+
+                set winW to ((screenW - pad * (c + 1)) / c) as integer
+                set winH to ((screenH - pad * (r + 1)) / r) as integer
+
+                repeat with j from 1 to dispCnt
+                    set winIdx to item j of dispWindows
+                    set idx to j - 1
+                    set col to idx mod c
+                    set row to idx div c
+                    set x1 to screenX + pad + col * (winW + pad)
+                    set y1 to screenY + pad + row * (winH + pad)
+                    set bounds of item winIdx of wl to {x1, y1, x1 + winW, y1 + winH}
+                    set totalArranged to totalArranged + 1
+                end repeat
             end if
-        end if
-
-        set screenW to 1920
-        set screenH to 1080 - menuBarH
-
-        set winW to ((screenW - pad * (cols + 1)) / cols) as integer
-        set winH to ((screenH - pad * (rows + 1)) / rows) as integer
-        set startY to -1080 + menuBarH
-
-        -- 全ウィンドウを配置
-        repeat with i from 1 to cnt
-            set wid to item i of display2Windows
-            set idx to i - 1
-            set c to idx mod cols
-            set r to idx div cols
-            set x1 to -384 + pad + c * (winW + pad)
-            set actualY to startY + pad + r * (winH + pad)
-            set boundsY to actualY + 1080
-
-            set bounds of window id wid to {x1, boundsY, x1 + winW, boundsY + winH}
-            delay 0.1
-            set totalArranged to totalArranged + 1
         end repeat
     end if
 
     return totalArranged
 end tell
-EOF
+" 2>/dev/null
 }
 
 # iTerm2のウィンドウをグリッド配置
@@ -850,8 +974,11 @@ main() {
     echo ""
     echo -e "${BOLD}配置を実行中...${NC}"
 
-    # 全ウィンドウを配置（ディスプレイ別に自動配置）
-    local arranged=$(arrange_terminal_windows "$cols" "$rows")
+    # ディスプレイ番号（未指定なら0=自動）
+    local disp=${display_num:-0}
+
+    # 全ウィンドウを配置
+    local arranged=$(arrange_terminal_windows "$cols" "$rows" "$disp")
     if [ -n "$arranged" ] && [ "$arranged" -gt 0 ] 2>/dev/null; then
         echo -e "${GREEN}✓ Terminal.app: ${arranged}個のウィンドウを配置${NC}"
     fi
